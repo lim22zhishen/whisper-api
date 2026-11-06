@@ -39,7 +39,12 @@ Linux only: let the engine find the GPU libraries.
 export LD_LIBRARY_PATH="$(.venv/bin/python -c 'import site; b=site.getsitepackages()[0]; print(f"{b}/nvidia/cublas/lib:{b}/nvidia/cudnn/lib")')"
 ```
 
-Copy `.env.example` to `.env`, then set a long random `WHISPER_API_KEY`.
+Copy `.env.example` to `.env`, then set `WHISPER_API_KEY`. The server won't listen on the
+network with a key under 16 characters. This prints a good one:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
 
 ## Run it
 
@@ -107,6 +112,9 @@ WHISPER_API_KEY=your-key uv run scripts/transcribe_folder.py "path/to/recordings
 In PowerShell, set the key first with `$env:WHISPER_API_KEY = "your-key"`. Results hold
 what was said in the audio, so keep them private.
 
+Add `--pattern "**/*.wav"` to include subfolders; results mirror the folder layout. If
+the server can't be reached after all retries, the run stops so you can re-run it later.
+
 ## API
 
 `POST /v1/audio/transcriptions` with `Authorization: Bearer <key>`, as a multipart form.
@@ -155,7 +163,7 @@ are treated as mono.
 |---|---|
 | 400 | Not readable as audio, or unknown language |
 | 401 | Missing or wrong key |
-| 411 / 413 | No upload size given / upload too large |
+| 411 / 413 | No upload size given or chunked upload / upload too large |
 | 503 | Queue full. Retry after the `Retry-After` wait; the folder script does this |
 
 Interactive docs are at `/docs`. `GET /health` needs no key.
@@ -165,7 +173,7 @@ Interactive docs are at `/docs`. `GET /health` needs no key.
 - Uploads are held in a temporary file only during the request.
 - Logs record counts and timings, never transcript text.
 - If the client disconnects, the work stops.
-- The server won't listen on the network without an API key.
+- The server won't listen on the network without a strong API key.
 
 ## Settings
 

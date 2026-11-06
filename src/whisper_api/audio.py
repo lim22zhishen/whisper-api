@@ -21,14 +21,14 @@ class AudioDecodeError(ValueError):
 def load_channels(source: BinaryIO, mode: ChannelMode = "auto") -> list[tuple[str, np.ndarray]]:
     """Return (channel name, 16 kHz samples) pairs: left and right, or a single mono."""
     try:
-        if mode == "auto" and _count_channels(source) == 2:
-            source.seek(0)
+        channel_count = _count_channels(source)
+        source.seek(0)
+        if mode == "auto" and channel_count == 2:
             left, right = decode_audio(source, SAMPLE_RATE, split_stereo=True)
             if not np.allclose(left, right, atol=_SAME_SIGNAL_TOLERANCE):
                 return [("left", left), ("right", right)]
             return [("mono", left)]
 
-        source.seek(0)
         return [("mono", decode_audio(source, SAMPLE_RATE))]
     except av.error.FFmpegError as exc:
         raise AudioDecodeError("Could not read the file as audio") from exc

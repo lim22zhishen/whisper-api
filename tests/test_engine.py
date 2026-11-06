@@ -5,6 +5,8 @@ import pytest
 from conftest import MONO_WAV, STEREO_WAV, FakeModel, segment, wav_bytes
 import numpy as np
 
+import whisper_api.engine as engine_module
+from whisper_api.config import Settings
 from whisper_api.engine import Engine, InvalidOption, TranscribeOptions, TranscriptionCancelled
 
 
@@ -83,6 +85,20 @@ def test_channel_with_no_speech_reports_no_language():
     result = run(model)
     assert result["channels"][1]["language"] is None
     assert result["language"] == "ms"
+
+
+@pytest.mark.parametrize("model_dir, expected", [("", None), (None, None), ("models", "models")])
+def test_empty_model_folder_uses_the_default_cache(monkeypatch, model_dir, expected):
+    seen = {}
+
+    def fake_whisper_model(name, **kwargs):
+        seen.update(kwargs)
+        return FakeModel()
+
+    monkeypatch.setattr(engine_module, "WhisperModel", fake_whisper_model)
+    settings = Settings(_env_file=None, device="cpu", model_dir=model_dir)
+    engine_module.load_engine(settings)
+    assert seen["download_root"] == expected
 
 
 def test_file_with_no_samples_gives_an_empty_result():

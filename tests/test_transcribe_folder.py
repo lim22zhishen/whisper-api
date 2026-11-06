@@ -4,9 +4,8 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import MONO_WAV, STEREO_WAV, FakeModel, fake_factory, live_server, make_settings
-
-from whisper_api.app import create_app
+import httpx
+from conftest import MONO_WAV, STEREO_WAV, FakeModel, live_server, make_app
 
 _spec = importlib.util.spec_from_file_location(
     "transcribe_folder", Path(__file__).parents[1] / "scripts" / "transcribe_folder.py"
@@ -28,7 +27,7 @@ def recordings(tmp_path) -> Path:
 def server(monkeypatch):
     monkeypatch.setenv("WHISPER_API_KEY", "test-key")
     model = FakeModel()
-    with live_server(create_app(make_settings(), fake_factory(model))) as url:
+    with live_server(make_app(model)) as url:
         yield url, model
 
 
@@ -101,8 +100,58 @@ def test_wrong_key_fails_without_saving_anything(server, recordings, tmp_path, m
     assert [p.name for p in out.iterdir()] == ["_failures.json"]
 
 
-def test_server_down_is_retried_then_reported(recordings, tmp_path, monkeypatch):
+def test_server_down_stops_the_run_after_one_recording(recordings, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("WHISPER_API_KEY", "test-key")
     out = tmp_path / "out"
     assert run("http://127.0.0.1:9", recordings, out) == 1
-    assert "Gave up" in json.loads((out / "_failures.json").read_text(encoding="utf-8"))["a.wav"]
+    failures = json.loads((out / "_failures.json").read_text(encoding="utf-8"))
+    assert list(failures) == ["a.wav"]
+    assert "Gave up" in failures["a.wav"]
+    assert "1 not tried" in capsys.readouterr().out
+
+
+def test_same_file_name_in_two_subfolders_keeps_both_results(server, tmp_path):
+    url, _ = server
+    source = tmp_path / "in"
+    for day in ("day1", "day2"):
+        (source / day).mkdir(parents=True)
+        (source / day / "1001.wav").write_bytes(MONO_WAV)
+    out = tmp_path / "out"
+
+    assert run(url, source, out, "--pattern", "**/*.wav", "--workers", "2") == 0
+
+    for day in ("day1", "day2"):
+        saved = json.loads((out / day / "1001.wav.json").read_text(encoding="utf-8"))
+        assert saved["source_file"] == f"{day}/1001.wav"
+
+    # Both count as finished on the next run.
+    _, model = server
+    calls = len(model.calls)
+    assert run(url, source, out, "--pattern", "**/*.wav") == 0
+    assert len(model.calls) == calls
+
+
+@pytest.mark.parametrize("bad_url", ["192.168.1.5:8000", "ftp://server"])
+def test_url_without_http_is_refused_at_the_start(bad_url, recordings, tmp_path):
+    with pytest.raises(SystemExit) as stopped:
+        run(bad_url, recordings, tmp_path / "out")
+    assert stopped.value.code == 2
+
+
+def retry_client(responses):
+    answers = iter(responses)
+    return httpx.Client(transport=httpx.MockTransport(lambda request: next(answers)))
+
+
+@pytest.mark.parametrize(
+    "headers, expected_wait",
+    [({"Retry-After": "7"}, 7.0), ({"Retry-After": "soon"}, 15.0), ({}, 15.0)],
+)
+def test_retry_uses_the_servers_wait_when_it_gives_one(monkeypatch, recordings, tmp_path, headers, expected_wait):
+    waits = []
+    monkeypatch.setattr(transcribe_folder.time, "sleep", waits.append)
+    args = transcribe_folder.parse_args([str(recordings), str(tmp_path)])
+    client = retry_client([httpx.Response(503, headers=headers), httpx.Response(200, json={"text": "ok"})])
+
+    assert transcribe_folder.transcribe_one(client, recordings / "a.wav", args) == {"text": "ok"}
+    assert waits == [expected_wait]

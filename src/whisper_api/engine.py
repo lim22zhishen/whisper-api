@@ -179,7 +179,7 @@ def load_engine(settings: Settings) -> Engine:
             compute_type=compute_type,
             cpu_threads=cpu_threads,
             num_workers=settings.workers,
-            download_root=settings.model_dir,
+            download_root=settings.model_dir or None,
         )
         # GPU libraries load on first use, not when the model is created.
         silence = np.zeros(16000, dtype=np.float32)

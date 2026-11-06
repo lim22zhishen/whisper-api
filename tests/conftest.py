@@ -1,9 +1,11 @@
 """Shared test helpers. All audio here is generated; no real recordings are used."""
 
 import io
+import struct
 import threading
 import time
 import wave
+import zlib
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -11,6 +13,7 @@ import numpy as np
 import pytest
 import uvicorn
 
+from whisper_api.app import create_app
 from whisper_api.config import Settings
 from whisper_api.engine import Engine
 
@@ -32,6 +35,25 @@ def wav_bytes(*channels: np.ndarray, rate: int = 8000) -> bytes:
 
 MONO_WAV = wav_bytes(tone(440))
 STEREO_WAV = wav_bytes(tone(440), tone(1000))
+
+
+def png_bytes() -> bytes:
+    """A valid 1x1 image: a real media file with no audio track."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    header = struct.pack(">IIBBBBB", 1, 1, 8, 0, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(b"\x00\x00"))
+        + chunk(b"IEND", b"")
+    )
+
+
+NO_AUDIO_PNG = png_bytes()
 
 
 def segment(start: float, end: float, text: str) -> SimpleNamespace:
@@ -71,15 +93,17 @@ def make_settings(**overrides) -> Settings:
     return Settings(_env_file=None, **{**defaults, **overrides})
 
 
-def fake_factory(model: FakeModel):
-    return lambda settings: Engine(
-        model,
+def make_app(model: FakeModel | None = None, **settings_overrides):
+    settings = make_settings(**settings_overrides)
+    engine = Engine(
+        model or FakeModel(),
         model_name="fake",
         device="cpu",
         compute_type="int8",
         beam_size=settings.beam_size,
         default_hotwords=settings.hotwords,
     )
+    return create_app(settings, engine)
 
 
 @contextmanager

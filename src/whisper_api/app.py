@@ -9,8 +9,6 @@ import logging
 import secrets
 import threading
 import time
-from collections.abc import Callable
-from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 
 import anyio.to_thread
@@ -21,38 +19,53 @@ from starlette.datastructures import Headers
 
 from .audio import AudioDecodeError, ChannelMode
 from .config import Settings
-from .engine import (
-    Engine,
-    InvalidOption,
-    TranscribeOptions,
-    TranscriptionCancelled,
-    load_engine,
-)
+from .engine import Engine, InvalidOption, TranscribeOptions, TranscriptionCancelled
 
 logger = logging.getLogger("whisper_api")
 
 DISCONNECT_POLL_SECONDS = 1.0
 
 
+class RequestLoad:
+    """Counts requests being uploaded, waiting or transcribed."""
+
+    def __init__(self, capacity: int) -> None:
+        self.capacity = capacity
+        self.in_flight = 0
+
+
 class RequestGuard:
-    """Checks the key and upload size before any of the upload is accepted.
+    """Checks the key, upload size and queue before any of the upload is accepted.
 
     This is ASGI middleware rather than a route dependency because FastAPI reads the
     whole body before it runs dependencies.
     """
 
-    def __init__(self, app, api_key: str, max_upload_bytes: int) -> None:
+    def __init__(self, app, api_key: str, max_upload_bytes: int, load: RequestLoad) -> None:
         self.app = app
         self.expected = f"Bearer {api_key}".encode() if api_key else None
         self.max_upload_bytes = max_upload_bytes
+        self.load = load
 
     async def __call__(self, scope, receive, send) -> None:
-        if scope["type"] == "http" and scope["path"].startswith("/v1/"):
-            problem = self._check(Headers(scope=scope), scope["method"])
-            if problem:
-                await problem(scope, receive, send)
-                return
-        await self.app(scope, receive, send)
+        if scope["type"] != "http" or not scope["path"].startswith("/v1/"):
+            await self.app(scope, receive, send)
+            return
+
+        problem = self._check(Headers(scope=scope), scope["method"])
+        if problem:
+            await problem(scope, receive, send)
+            return
+
+        if scope["method"] != "POST":
+            await self.app(scope, receive, send)
+            return
+
+        self.load.in_flight += 1
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            self.load.in_flight -= 1
 
     def _check(self, headers: Headers, method: str) -> JSONResponse | None:
         if self.expected is not None:
@@ -63,45 +76,48 @@ class RequestGuard:
                     status_code=401,
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-        if method == "POST":
-            length = headers.get("content-length", "")
-            if not length.isdigit():
-                return JSONResponse({"detail": "Content-Length is required"}, status_code=411)
-            if int(length) > self.max_upload_bytes:
-                return JSONResponse({"detail": "Upload is too large"}, status_code=413)
+        if method != "POST":
+            return None
+
+        # A chunked body overrides Content-Length, which would dodge the size limit.
+        length = headers.get("content-length", "")
+        if "transfer-encoding" in headers or not length.isdigit():
+            return JSONResponse(
+                {"detail": "Content-Length is required, chunked uploads are not supported"},
+                status_code=411,
+            )
+        if int(length) > self.max_upload_bytes:
+            return JSONResponse({"detail": "Upload is too large"}, status_code=413)
+        if self.load.in_flight >= self.load.capacity:
+            return JSONResponse(
+                {"detail": "Server is busy, try again"},
+                status_code=503,
+                headers={"Retry-After": "30"},
+            )
         return None
 
 
-def create_app(
-    settings: Settings,
-    engine_factory: Callable[[Settings], Engine] = load_engine,
-) -> FastAPI:
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        app.state.engine = await anyio.to_thread.run_sync(engine_factory, settings)
-        yield
-
-    app = FastAPI(title="Whisper API", version="0.1.0", lifespan=lifespan)
+def create_app(settings: Settings, engine: Engine) -> FastAPI:
+    load = RequestLoad(settings.workers + settings.max_queue)
+    app = FastAPI(title="Whisper API", version="0.1.0")
     app.add_middleware(
         RequestGuard,
         api_key=settings.api_key,
         max_upload_bytes=settings.max_upload_mb * 1024 * 1024,
+        load=load,
     )
 
     slots = asyncio.Semaphore(settings.workers)
-    capacity = settings.workers + settings.max_queue
-    in_flight = 0
 
     @app.get("/health")
     def health() -> dict:
-        engine: Engine = app.state.engine
         return {
             "status": "ok",
             "model": engine.model_name,
             "device": engine.device,
             "compute_type": engine.compute_type,
             "workers": settings.workers,
-            "in_flight": in_flight,
+            "in_flight": load.in_flight,
         }
 
     # Security() only adds the Authorize button to /docs; RequestGuard does the check.
@@ -122,11 +138,6 @@ def create_app(
         ] = "auto",
         response_format: Annotated[Literal["json", "text", "verbose_json"], Form()] = "json",
     ) -> Response:
-        nonlocal in_flight
-        if in_flight >= capacity:
-            raise HTTPException(503, "Server is busy, try again", headers={"Retry-After": "30"})
-
-        engine: Engine = app.state.engine
         options = TranscribeOptions(
             language=language or None,
             prompt=prompt,
@@ -135,7 +146,6 @@ def create_app(
         )
         cancel = threading.Event()
         watcher = asyncio.create_task(_cancel_when_disconnected(request, cancel))
-        in_flight += 1
         try:
             async with slots:
                 started = time.perf_counter()
@@ -148,7 +158,6 @@ def create_app(
         except (AudioDecodeError, InvalidOption) as exc:
             raise HTTPException(400, str(exc)) from exc
         finally:
-            in_flight -= 1
             watcher.cancel()
 
         took = time.perf_counter() - started

@@ -2,7 +2,7 @@ import io
 
 import numpy as np
 import pytest
-from conftest import MONO_WAV, STEREO_WAV, tone, wav_bytes
+from conftest import MONO_WAV, NO_AUDIO_PNG, STEREO_WAV, tone, wav_bytes
 
 from whisper_api.audio import AudioDecodeError, load_channels
 
@@ -32,6 +32,12 @@ def test_stereo_with_identical_channels_is_not_transcribed_twice():
 
 def test_mix_mode_gives_one_signal_for_stereo():
     assert [name for name, _ in load_channels(io.BytesIO(STEREO_WAV), "mix")] == ["mono"]
+
+
+@pytest.mark.parametrize("mode", ["auto", "mix"])
+def test_media_file_with_no_audio_track_is_rejected(mode):
+    with pytest.raises(AudioDecodeError, match="no audio track"):
+        load_channels(io.BytesIO(NO_AUDIO_PNG), mode)
 
 
 def test_non_audio_is_rejected():
