@@ -1,0 +1,19 @@
+# Secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Downloaded speech models
+models/
+
+# Server logs
+logs/
+
+# Audio and transcripts can be private and must never be committed
+out/
+data/
+*.wav
