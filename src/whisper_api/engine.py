@@ -44,6 +44,50 @@ class TranscribeOptions:
     channels: ChannelMode = "auto"
 
 
+class LimitedLanguages:
+    """Wraps the CTranslate2 model so language detection only picks allowed languages.
+
+    faster-whisper detects the language of each 30-second window and writes the whole
+    window in it. Left open, it sometimes picks a language nobody spoke, such as
+    Indonesian for Malay, and that window comes out in the wrong language.
+    """
+
+    def __init__(self, model: Any, languages: list[str]) -> None:
+        self._model = model
+        self._tokens = {f"<|{code}|>" for code in languages}
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._model, name)
+
+    def detect_language(self, *args: Any, **kwargs: Any) -> list[list[tuple[str, float]]]:
+        return [self._limit(ranked) for ranked in self._model.detect_language(*args, **kwargs)]
+
+    def _limit(self, ranked: list[tuple[str, float]]) -> list[tuple[str, float]]:
+        kept = [(token, p) for token, p in ranked if token in self._tokens]
+        total = sum(p for _, p in kept)
+        if total <= 0:
+            return kept or ranked
+        # Rescale so the allowed languages' chances add up to 1.
+        return [(token, p / total) for token, p in kept]
+
+
+def parse_languages(value: str) -> list[str]:
+    """Turn "ms, EN,zh" into ["ms", "en", "zh"]."""
+    codes = (code.strip().lower() for code in value.split(","))
+    return list(dict.fromkeys(code for code in codes if code))
+
+
+def limit_languages(model: Any, languages: list[str]) -> None:
+    """Make detection choose only from `languages`. An empty list leaves it open."""
+    unknown = [code for code in languages if code not in model.supported_languages]
+    if unknown:
+        raise EngineStartupError(
+            f"Unknown language code in WHISPER_LANGUAGES: {', '.join(unknown)}"
+        )
+    if languages:
+        model.model = LimitedLanguages(model.model, languages)
+
+
 class Engine:
     def __init__(
         self,
@@ -54,6 +98,7 @@ class Engine:
         compute_type: str = "",
         beam_size: int = 5,
         default_hotwords: str = "",
+        languages: list[str] | None = None,
     ) -> None:
         self.model = model
         self.model_name = model_name
@@ -61,6 +106,7 @@ class Engine:
         self.compute_type = compute_type
         self.beam_size = beam_size
         self.default_hotwords = default_hotwords
+        self.languages = list(languages or [])  # only reported; limit_languages applies it
 
     def transcribe(
         self,
@@ -189,6 +235,11 @@ def load_engine(settings: Settings) -> Engine:
             raise EngineStartupError(f"{GPU_HELP} Original error: {exc}") from exc
         raise EngineStartupError(f"Could not load the speech model: {exc}") from exc
 
+    languages = parse_languages(settings.languages)
+    limit_languages(model, languages)
+    if languages:
+        logger.info("Language detection limited to %s", ", ".join(languages))
+
     logger.info("Model ready")
     return Engine(
         model,
@@ -197,6 +248,7 @@ def load_engine(settings: Settings) -> Engine:
         compute_type=compute_type,
         beam_size=settings.beam_size,
         default_hotwords=settings.hotwords,
+        languages=languages,
     )
 
 

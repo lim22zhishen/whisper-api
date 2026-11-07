@@ -116,6 +116,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             "model": engine.model_name,
             "device": engine.device,
             "compute_type": engine.compute_type,
+            "languages": engine.languages,
             "workers": settings.workers,
             "in_flight": load.in_flight,
         }
@@ -129,9 +130,15 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         request: Request,
         file: Annotated[UploadFile, File(description="Audio file")],
         language: Annotated[str | None, Form(description="Force a language, e.g. ms")] = None,
-        prompt: Annotated[str | None, Form(description="Starting text hint")] = None,
+        prompt: Annotated[
+            str | None, Form(description="Text hint for the first 30 seconds only")
+        ] = None,
         hotwords: Annotated[
-            str | None, Form(description="Terms to favour; replaces the server default")
+            str | None,
+            Form(
+                description="Terms or a sample sentence, sent with every 30 seconds of audio; "
+                "replaces the server default"
+            ),
         ] = None,
         channels: Annotated[
             ChannelMode, Form(description="auto splits true stereo; mix makes one signal")

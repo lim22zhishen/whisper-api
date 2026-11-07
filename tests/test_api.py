@@ -32,6 +32,11 @@ def test_health_needs_no_key_and_reveals_no_secret():
     assert "test-key" not in response.text
 
 
+def test_health_reports_the_language_limit():
+    with client_for(languages="ms, en") as client:
+        assert client.get("/health").json()["languages"] == ["ms", "en"]
+
+
 @pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer wrong"}, {"Authorization": "Bearer tést".encode()}])
 def test_transcription_rejects_a_missing_or_wrong_key(headers):
     with client_for() as client:

@@ -7,7 +7,14 @@ import numpy as np
 
 import whisper_api.engine as engine_module
 from whisper_api.config import Settings
-from whisper_api.engine import Engine, InvalidOption, TranscribeOptions, TranscriptionCancelled
+from whisper_api.engine import (
+    Engine,
+    EngineStartupError,
+    InvalidOption,
+    LimitedLanguages,
+    TranscribeOptions,
+    TranscriptionCancelled,
+)
 
 
 def run(model, wav=STEREO_WAV, options=TranscribeOptions(), cancel=None, **engine_args):
@@ -107,3 +114,54 @@ def test_file_with_no_samples_gives_an_empty_result():
     assert result["segments"] == []
     assert result["language"] is None
     assert model.calls == []
+
+
+class FakeTranslator:
+    """Stands in for the CTranslate2 model that WhisperModel keeps in `.model`."""
+
+    is_multilingual = True
+
+    def __init__(self, ranked=(("<|id|>", 0.6), ("<|ms|>", 0.3), ("<|en|>", 0.1))):
+        self.ranked = list(ranked)
+
+    def detect_language(self, features):
+        return [self.ranked]
+
+
+def test_limited_detection_drops_other_languages_and_rescales():
+    limited = LimitedLanguages(FakeTranslator(), ["ms", "en"])
+    [ranked] = limited.detect_language(None)
+    assert [token for token, _ in ranked] == ["<|ms|>", "<|en|>"]
+    assert [p for _, p in ranked] == pytest.approx([0.75, 0.25])
+    assert limited.is_multilingual is True  # everything else passes through
+
+
+def test_limited_detection_survives_zero_chances():
+    limited = LimitedLanguages(FakeTranslator([("<|id|>", 1.0), ("<|ms|>", 0.0)]), ["ms"])
+    assert limited.detect_language(None) == [[("<|ms|>", 0.0)]]
+
+
+def load_with_languages(monkeypatch, languages):
+    model = FakeModel()
+    model.model = FakeTranslator()
+    monkeypatch.setattr(engine_module, "WhisperModel", lambda name, **kwargs: model)
+    settings = Settings(_env_file=None, device="cpu", languages=languages)
+    return engine_module.load_engine(settings), model
+
+
+def test_language_limit_is_applied_at_startup(monkeypatch):
+    engine, model = load_with_languages(monkeypatch, " MS, en,,ms")
+    assert engine.languages == ["ms", "en"]
+    [ranked] = model.model.detect_language(None)
+    assert ranked[0][0] == "<|ms|>"
+
+
+def test_no_language_limit_leaves_detection_open(monkeypatch):
+    engine, model = load_with_languages(monkeypatch, "")
+    assert engine.languages == []
+    assert isinstance(model.model, FakeTranslator)
+
+
+def test_unknown_code_in_the_language_limit_stops_startup(monkeypatch):
+    with pytest.raises(EngineStartupError, match="xx"):
+        load_with_languages(monkeypatch, "ms,xx")

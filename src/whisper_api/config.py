@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     cpu_threads: int = Field(default=0, ge=0)
     beam_size: int = Field(default=5, ge=1)
     hotwords: str = ""
+    # Language codes detection may pick from, comma separated. Empty allows all.
+    languages: str = ""
 
     workers: int = Field(default=1, ge=1)
     max_queue: int = Field(default=16, ge=0)

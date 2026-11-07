@@ -125,13 +125,14 @@ the base URL. Any `model` value sent is ignored.
 |---|---|
 | `file` | The audio file (required) |
 | `response_format` | `json` (default), `text` or `verbose_json` |
-| `language` | Force a language such as `ms`. Default detects it as the audio goes on |
-| `hotwords` | Terms to favour, replacing the server's list. Empty turns them off |
-| `prompt` | Starting text hint |
+| `language` | Force a language such as `ms`. Default detects it for each 30 seconds of speech |
+| `hotwords` | Terms or a sample sentence to favour, sent with every 30 seconds of audio. Replaces the server's list; empty turns them off |
+| `prompt` | Text hint for the first 30 seconds only |
 | `channels` | `auto` (default) splits true stereo. `mix` makes one signal |
 
-The server never translates. It skips silence, and stereo files with identical channels
-are treated as mono.
+The server never asks the model to translate, though mixed-language speech can still
+come out translated (see [Mixed-language speech](#mixed-language-speech)). It skips
+silence, and stereo files with identical channels are treated as mono.
 
 `verbose_json` result:
 
@@ -155,9 +156,9 @@ are treated as mono.
 ```
 
 - `channel` is `left`, `right` or `mono`. The server doesn't know who is on which side.
-- Each channel's `language` is the one detected at its start. Audio that switches language
-  is still transcribed correctly as it goes, but the library doesn't report a language
-  per line.
+- Each channel's `language` is the one detected at its start. Detection runs again for
+  each 30 seconds of speech, but the library doesn't report a language per line. See
+  [Mixed-language speech](#mixed-language-speech).
 
 | Status | Meaning |
 |---|---|
@@ -167,6 +168,32 @@ are treated as mono.
 | 503 | Queue full. Retry after the `Retry-After` wait; the folder script does this |
 
 Interactive docs are at `/docs`. `GET /health` needs no key.
+
+## Mixed-language speech
+
+The model picks one language for each 30 seconds of speech and writes that whole stretch
+in it. When speakers switch language mid-sentence, the other language can come out
+translated, and sometimes the pick is a language nobody spoke. Cheapest fixes first:
+
+1. Limit the picks to the languages your speakers use, e.g. `WHISPER_LANGUAGES=ms,en,zh`.
+   Include every language that is spoken: speech in a language left out comes out as a
+   garbled translation.
+2. Add a short sample sentence to `WHISPER_HOTWORDS`, mixing the languages the way your
+   speakers do. It is sent with every 30 seconds of audio and nudges the model to keep
+   the mix. `prompt` only reaches the first 30 seconds. If the sentence starts showing up
+   in transcripts, shorten it.
+3. Try another model. Whisper models differ in how well they keep mixed speech as spoken,
+   so compare a few on your own recordings. `WHISPER_MODEL` takes a name such as
+   `large-v3-turbo` (smaller and faster), the Hugging Face ID of a CTranslate2
+   conversion, or a folder. To convert a fine-tuned Whisper model yourself:
+
+   ```bash
+   pip install ctranslate2 "transformers[torch]"
+   ct2-transformers-converter --model ORG/MODEL --output_dir models/my-model --copy_files tokenizer.json preprocessor_config.json --quantization float16
+   ```
+
+Restart the server after changing `.env`. `/health` shows the model and language limit
+in use. Test a change on a few recordings before re-running everything.
 
 ## Privacy
 

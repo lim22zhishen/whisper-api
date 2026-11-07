@@ -15,7 +15,7 @@ import uvicorn
 
 from whisper_api.app import create_app
 from whisper_api.config import Settings
-from whisper_api.engine import Engine
+from whisper_api.engine import Engine, parse_languages
 
 
 def tone(frequency: float, seconds: float = 1.0, rate: int = 8000) -> np.ndarray:
@@ -102,6 +102,7 @@ def make_app(model: FakeModel | None = None, **settings_overrides):
         compute_type="int8",
         beam_size=settings.beam_size,
         default_hotwords=settings.hotwords,
+        languages=parse_languages(settings.languages),
     )
     return create_app(settings, engine)
 
