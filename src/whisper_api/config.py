@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     compute_type: str = "auto"
     cpu_threads: int = Field(default=0, ge=0)
     beam_size: int = Field(default=5, ge=1)
+    # Pieces of speech run on the GPU together. 0 runs them one at a time.
+    batch_size: int = Field(default=0, ge=0)
     hotwords: str = ""
     # Language codes detection may pick from, comma separated. Empty allows all.
     languages: str = ""

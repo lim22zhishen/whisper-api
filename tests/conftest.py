@@ -106,6 +106,7 @@ def make_app(model: FakeModel | None = None, **settings_overrides):
         default_hotwords=settings.hotwords,
         languages=parse_languages(settings.languages),
         line_gap_seconds=settings.line_gap_seconds,
+        batch_size=settings.batch_size,
     )
     return create_app(settings, engine)
 

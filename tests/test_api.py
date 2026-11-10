@@ -42,6 +42,11 @@ def test_health_reports_the_line_gap():
         assert client.get("/health").json()["line_gap_seconds"] == 0.7
 
 
+def test_health_reports_the_batch_size():
+    with client_for(batch_size=8) as client:
+        assert client.get("/health").json()["batch_size"] == 8
+
+
 @pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer wrong"}, {"Authorization": "Bearer tést".encode()}])
 def test_transcription_rejects_a_missing_or_wrong_key(headers):
     with client_for() as client:

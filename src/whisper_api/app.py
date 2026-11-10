@@ -118,6 +118,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             "compute_type": engine.compute_type,
             "languages": engine.languages,
             "line_gap_seconds": engine.line_gap_seconds,
+            "batch_size": engine.batch_size,
             "workers": settings.workers,
             "in_flight": load.in_flight,
         }

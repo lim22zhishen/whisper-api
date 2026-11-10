@@ -1,3 +1,4 @@
+import inspect
 import io
 import threading
 
@@ -134,6 +135,59 @@ def test_a_line_without_word_times_is_kept_whole():
     model = FakeModel([[segment(0.0, 5.0, " hello there")]])
     result = run(model, wav=MONO_WAV, line_gap_seconds=1.0)
     assert [(s["start"], s["end"], s["text"]) for s in result["segments"]] == [(0.0, 5.0, "hello there")]
+
+
+@pytest.fixture
+def batch_pipelines(monkeypatch):
+    """Replaces faster-whisper's batch mode; lists the model each pipeline was made for."""
+    made = []
+
+    class FakePipeline:
+        def __init__(self, model):
+            made.append(model)
+            self.model = model
+
+        def transcribe(self, audio, **kwargs):
+            return self.model.transcribe(audio, **kwargs)
+
+    monkeypatch.setattr(engine_module, "BatchedInferencePipeline", FakePipeline)
+    return made
+
+
+def test_batch_mode_sends_the_usual_options_and_the_batch_size(batch_pipelines):
+    model = FakeModel([[segment(0.0, 20.8, " yes okay no 好的", words=REPLIES)]])
+    result = run(model, default_hotwords="Kubernetes", line_gap_seconds=1.0, batch_size=8)
+    assert batch_pipelines == [model, model]  # a new pipeline for each channel
+    _, kwargs = model.calls[0]
+    assert kwargs["batch_size"] == 8
+    assert kwargs["without_timestamps"] is False
+    assert kwargs["task"] == "transcribe"
+    assert kwargs["multilingual"] is True
+    assert kwargs["hotwords"] == "Kubernetes"
+    assert kwargs["word_timestamps"] is True
+    assert [s["text"] for s in result["segments"] if s["channel"] == "left"] == ["yes okay", "no", "好的"]
+
+
+def test_batch_mode_in_the_library_takes_every_option_sent(batch_pipelines):
+    from faster_whisper import BatchedInferencePipeline
+
+    model = FakeModel()
+    run(model, wav=MONO_WAV, line_gap_seconds=1.0, batch_size=4)
+    accepted = inspect.signature(BatchedInferencePipeline.transcribe).parameters
+    assert set(model.calls[0][1]) <= set(accepted)
+
+
+def test_batch_size_zero_runs_pieces_one_at_a_time(batch_pipelines):
+    model = FakeModel()
+    run(model, wav=MONO_WAV)
+    assert batch_pipelines == []
+    assert "batch_size" not in model.calls[0][1]
+
+
+def test_batch_size_setting_reaches_the_engine(monkeypatch):
+    monkeypatch.setattr(engine_module, "WhisperModel", lambda name, **kwargs: FakeModel())
+    engine = engine_module.load_engine(Settings(_env_file=None, device="cpu", batch_size=8))
+    assert engine.batch_size == 8
 
 
 @pytest.mark.parametrize("model_dir, expected", [("", None), (None, None), ("models", "models")])

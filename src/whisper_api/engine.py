@@ -10,7 +10,7 @@ from typing import Any, BinaryIO
 
 import ctranslate2
 import numpy as np
-from faster_whisper import WhisperModel
+from faster_whisper import BatchedInferencePipeline, WhisperModel
 
 from .audio import ChannelMode, load_channels
 from .config import Settings
@@ -100,6 +100,7 @@ class Engine:
         default_hotwords: str = "",
         languages: list[str] | None = None,
         line_gap_seconds: float = 0.0,
+        batch_size: int = 0,
     ) -> None:
         self.model = model
         self.model_name = model_name
@@ -109,6 +110,7 @@ class Engine:
         self.default_hotwords = default_hotwords
         self.languages = list(languages or [])  # only reported; limit_languages applies it
         self.line_gap_seconds = line_gap_seconds  # 0 keeps the model's own lines
+        self.batch_size = batch_size  # 0 runs the pieces of speech one at a time
 
     def transcribe(
         self,
@@ -179,7 +181,19 @@ class Engine:
         if samples.size == 0:
             return [], None
 
-        found, info = self.model.transcribe(samples, **decode_options)
+        if self.batch_size:
+            # The pipeline keeps state between batches, so each call gets its own: with
+            # several workers, calls run at the same time on the one model.
+            found, info = BatchedInferencePipeline(self.model).transcribe(
+                samples,
+                **decode_options,
+                batch_size=self.batch_size,
+                # Batch mode's default writes one line per 30-second piece; this keeps
+                # the model's own sentence-length lines, as in one-at-a-time mode.
+                without_timestamps=False,
+            )
+        else:
+            found, info = self.model.transcribe(samples, **decode_options)
         results = []
         for segment in found:  # each step of this loop does the real work
             self._check(cancel)
@@ -270,6 +284,8 @@ def load_engine(settings: Settings) -> Engine:
     limit_languages(model, languages)
     if languages:
         logger.info("Language detection limited to %s", ", ".join(languages))
+    if settings.batch_size:
+        logger.info("Running up to %d pieces of speech at once", settings.batch_size)
 
     logger.info("Model ready")
     return Engine(
@@ -281,6 +297,7 @@ def load_engine(settings: Settings) -> Engine:
         default_hotwords=settings.hotwords,
         languages=languages,
         line_gap_seconds=settings.line_gap_seconds,
+        batch_size=settings.batch_size,
     )
 
 

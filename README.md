@@ -200,6 +200,26 @@ translated, and sometimes the pick is a language nobody spoke. Cheapest fixes fi
 Restart the server after changing `.env`. `/health` shows the model, language limit
 and line gap in use. Test a change on a few recordings before re-running everything.
 
+## Speed
+
+Two settings make a run faster. Try one at a time on a few recordings, because both
+use more GPU memory and together they use the most. Watch memory with `nvidia-smi`
+during a run.
+
+- `WHISPER_BATCH_SIZE=8` runs up to 8 pieces of speech (up to 30 seconds each) from one
+  recording on the GPU together. In faster-whisper's own test this was about 3.7 times
+  faster and took about 1.5 GB more GPU memory. Lower it if the GPU runs out of memory;
+  those requests fail with status 500. Compared with the default `0`:
+  - A piece that comes out garbled or stuck repeating isn't tried again. One at a
+    time, the model retries such pieces with more randomness.
+  - `prompt` is sent with every piece, not only the first 30 seconds.
+  - The language limit, hotwords and line splitting work the same.
+- `WHISPER_WORKERS=2`, with `--workers 2` on the folder script, transcribes two
+  recordings at the same time. On one GPU the gain is smaller, mostly from reading
+  audio and finding speech while the GPU works on the other recording.
+
+`/health` shows the batch size and workers in use.
+
 ## Privacy
 
 - Uploads are held in a temporary file only during the request.
@@ -210,6 +230,7 @@ and line gap in use. Test a change on a few recordings before re-running everyth
 ## Settings
 
 All are in `.env.example`. `WHISPER_COMPUTE_TYPE=int8_float16` uses less GPU memory.
+For faster runs see [Speed](#speed).
 
 ## Development
 
