@@ -94,6 +94,48 @@ def test_channel_with_no_speech_reports_no_language():
     assert result["language"] == "ms"
 
 
+REPLIES = [(0.0, 0.4, " yes"), (0.5, 0.9, " okay"), (9.0, 9.5, " no"), (20.0, 20.4, " 好"), (20.4, 20.8, "的")]
+
+
+def test_a_line_is_split_where_the_speaker_paused():
+    model = FakeModel([[segment(0.0, 20.8, " yes okay no 好的", words=REPLIES)]])
+    result = run(model, wav=MONO_WAV, line_gap_seconds=1.0)
+    assert [(s["id"], s["start"], s["end"], s["text"]) for s in result["segments"]] == [
+        (0, 0.0, 0.9, "yes okay"),
+        (1, 9.0, 9.5, "no"),
+        (2, 20.0, 20.8, "好的"),
+    ]
+    assert {s["avg_logprob"] for s in result["segments"]} == {-0.2}
+    assert result["channels"][0]["speech_seconds"] == 2.2
+    assert model.calls[0][1]["word_timestamps"] is True
+
+
+def test_split_replies_slot_between_the_other_sides_lines():
+    model = FakeModel([
+        [segment(0.0, 9.5, " yes okay no", words=REPLIES[:3])],
+        [segment(2.0, 8.0, " a long question")],
+    ])
+    result = run(model, line_gap_seconds=1.0)
+    assert [(s["channel"], s["text"]) for s in result["segments"]] == [
+        ("left", "yes okay"),
+        ("right", "a long question"),
+        ("left", "no"),
+    ]
+
+
+def test_no_line_gap_keeps_the_models_own_lines():
+    model = FakeModel([[segment(0.0, 20.8, " yes okay no", words=REPLIES[:3])]])
+    result = run(model, wav=MONO_WAV)
+    assert [s["text"] for s in result["segments"]] == ["yes okay no"]
+    assert model.calls[0][1]["word_timestamps"] is False
+
+
+def test_a_line_without_word_times_is_kept_whole():
+    model = FakeModel([[segment(0.0, 5.0, " hello there")]])
+    result = run(model, wav=MONO_WAV, line_gap_seconds=1.0)
+    assert [(s["start"], s["end"], s["text"]) for s in result["segments"]] == [(0.0, 5.0, "hello there")]
+
+
 @pytest.mark.parametrize("model_dir, expected", [("", None), (None, None), ("models", "models")])
 def test_empty_model_folder_uses_the_default_cache(monkeypatch, model_dir, expected):
     seen = {}

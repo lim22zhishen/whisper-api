@@ -56,9 +56,11 @@ def png_bytes() -> bytes:
 NO_AUDIO_PNG = png_bytes()
 
 
-def segment(start: float, end: float, text: str) -> SimpleNamespace:
+def segment(start: float, end: float, text: str, words=None) -> SimpleNamespace:
+    """`words` is a list of (start, end, word), as the model gives when asked for word times."""
     return SimpleNamespace(
-        start=start, end=end, text=text, avg_logprob=-0.2, compression_ratio=1.1, no_speech_prob=0.01
+        start=start, end=end, text=text, avg_logprob=-0.2, compression_ratio=1.1, no_speech_prob=0.01,
+        words=[SimpleNamespace(start=s, end=e, word=w) for s, e, w in words] if words else None,
     )
 
 
@@ -103,6 +105,7 @@ def make_app(model: FakeModel | None = None, **settings_overrides):
         beam_size=settings.beam_size,
         default_hotwords=settings.hotwords,
         languages=parse_languages(settings.languages),
+        line_gap_seconds=settings.line_gap_seconds,
     )
     return create_app(settings, engine)
 

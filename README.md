@@ -156,6 +156,11 @@ silence, and stereo files with identical channels are treated as mono.
 ```
 
 - `channel` is `left`, `right` or `mono`. The server doesn't know who is on which side.
+- A line ends where the speaker pauses for `WHISPER_LINE_GAP_SECONDS` (default 1) or more.
+  Without this, short replies far apart come out as one long line at the first one's
+  time, because the model writes over speech with the silence removed. The parts of a
+  split line share the model's scores for the whole line. It makes transcription
+  somewhat slower; `0` turns it off.
 - Each channel's `language` is the one detected at its start. Detection runs again for
   each 30 seconds of speech, but the library doesn't report a language per line. See
   [Mixed-language speech](#mixed-language-speech).
@@ -192,8 +197,8 @@ translated, and sometimes the pick is a language nobody spoke. Cheapest fixes fi
    ct2-transformers-converter --model ORG/MODEL --output_dir models/my-model --copy_files tokenizer.json preprocessor_config.json --quantization float16
    ```
 
-Restart the server after changing `.env`. `/health` shows the model and language limit
-in use. Test a change on a few recordings before re-running everything.
+Restart the server after changing `.env`. `/health` shows the model, language limit
+and line gap in use. Test a change on a few recordings before re-running everything.
 
 ## Privacy
 

@@ -37,6 +37,11 @@ def test_health_reports_the_language_limit():
         assert client.get("/health").json()["languages"] == ["ms", "en"]
 
 
+def test_health_reports_the_line_gap():
+    with client_for(line_gap_seconds=0.7) as client:
+        assert client.get("/health").json()["line_gap_seconds"] == 0.7
+
+
 @pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer wrong"}, {"Authorization": "Bearer tést".encode()}])
 def test_transcription_rejects_a_missing_or_wrong_key(headers):
     with client_for() as client:

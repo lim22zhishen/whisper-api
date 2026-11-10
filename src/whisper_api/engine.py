@@ -99,6 +99,7 @@ class Engine:
         beam_size: int = 5,
         default_hotwords: str = "",
         languages: list[str] | None = None,
+        line_gap_seconds: float = 0.0,
     ) -> None:
         self.model = model
         self.model_name = model_name
@@ -107,6 +108,7 @@ class Engine:
         self.beam_size = beam_size
         self.default_hotwords = default_hotwords
         self.languages = list(languages or [])  # only reported; limit_languages applies it
+        self.line_gap_seconds = line_gap_seconds  # 0 keeps the model's own lines
 
     def transcribe(
         self,
@@ -131,6 +133,8 @@ class Engine:
             "vad_parameters": {"min_silence_duration_ms": 500},
             # Feeding earlier text back in can cause repeated-phrase loops.
             "condition_on_previous_text": False,
+            # Word times are only needed to split lines at pauses, and they cost speed.
+            "word_timestamps": self.line_gap_seconds > 0,
         }
 
         duration = 0.0
@@ -179,18 +183,45 @@ class Engine:
         results = []
         for segment in found:  # each step of this loop does the real work
             self._check(cancel)
-            results.append(
-                {
-                    "channel": name,
-                    "start": round(segment.start, 2),
-                    "end": round(segment.end, 2),
-                    "text": segment.text.strip(),
-                    "avg_logprob": round(segment.avg_logprob, 4),
-                    "compression_ratio": round(segment.compression_ratio, 4),
-                    "no_speech_prob": round(segment.no_speech_prob, 4),
-                }
-            )
+            for start, end, text in self._lines(segment):
+                results.append(
+                    {
+                        "channel": name,
+                        "start": round(start, 2),
+                        "end": round(end, 2),
+                        "text": text,
+                        # The model scores its own line; the parts of a split line share it.
+                        "avg_logprob": round(segment.avg_logprob, 4),
+                        "compression_ratio": round(segment.compression_ratio, 4),
+                        "no_speech_prob": round(segment.no_speech_prob, 4),
+                    }
+                )
         return results, info
+
+    def _lines(self, segment: Any) -> list[tuple[float, float, str]]:
+        """Split one model line wherever the speaker paused.
+
+        With silence skipped, the model writes one line over speech that was far apart,
+        such as short replies between the other side's turns. Word times point back to
+        the real audio, so a long gap between two words is a real pause.
+        """
+        words = getattr(segment, "words", None) if self.line_gap_seconds > 0 else None
+        if not words:
+            return [(segment.start, segment.end, segment.text.strip())]
+
+        groups = [[words[0]]]
+        for word in words[1:]:
+            if word.start - groups[-1][-1].end >= self.line_gap_seconds:
+                groups.append([word])
+            else:
+                groups[-1].append(word)
+
+        lines = []
+        for group in groups:
+            text = "".join(word.word for word in group).strip()
+            if text:
+                lines.append((group[0].start, group[-1].end, text))
+        return lines or [(segment.start, segment.end, segment.text.strip())]
 
     @staticmethod
     def _check(cancel: threading.Event) -> None:
@@ -249,6 +280,7 @@ def load_engine(settings: Settings) -> Engine:
         beam_size=settings.beam_size,
         default_hotwords=settings.hotwords,
         languages=languages,
+        line_gap_seconds=settings.line_gap_seconds,
     )
 
 

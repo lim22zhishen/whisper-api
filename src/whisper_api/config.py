@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     hotwords: str = ""
     # Language codes detection may pick from, comma separated. Empty allows all.
     languages: str = ""
+    # A pause this long between two words starts a new line. 0 keeps the model's own lines.
+    line_gap_seconds: float = Field(default=1.0, ge=0)
 
     workers: int = Field(default=1, ge=1)
     max_queue: int = Field(default=16, ge=0)
