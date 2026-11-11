@@ -230,11 +230,26 @@ class Engine:
             else:
                 groups[-1].append(word)
 
+        # When the model can't place a word in time it gives it no length, so the gap
+        # before it isn't a real pause. Such words join the nearest line with real times
+        # instead of becoming a zero-length line of their own.
+        timed = [i for i, group in enumerate(groups) if group[-1].end > group[0].start]
+        if not timed:
+            return [(segment.start, segment.end, segment.text.strip())]
+        spans = {i: (groups[i][0].start, groups[i][-1].end) for i in timed}
+
+        def nearest(moment: float) -> int:
+            return min(timed, key=lambda i: max(spans[i][0] - moment, moment - spans[i][1], 0.0))
+
+        joined: dict[int, list[Any]] = {i: [] for i in timed}
+        for i, group in enumerate(groups):
+            joined[i if i in spans else nearest(group[0].start)].extend(group)
+
         lines = []
-        for group in groups:
-            text = "".join(word.word for word in group).strip()
+        for i in timed:
+            text = "".join(word.word for word in joined[i]).strip()
             if text:
-                lines.append((group[0].start, group[-1].end, text))
+                lines.append((spans[i][0], spans[i][1], text))
         return lines or [(segment.start, segment.end, segment.text.strip())]
 
     @staticmethod

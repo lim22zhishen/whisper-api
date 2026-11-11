@@ -131,6 +131,32 @@ def test_no_line_gap_keeps_the_models_own_lines():
     assert model.calls[0][1]["word_timestamps"] is False
 
 
+@pytest.mark.parametrize(
+    "words, expected",
+    [
+        # Unplaced word far after a reply: it joins the reply, keeping the reply's times.
+        ([(0.0, 0.4, " yes"), (0.5, 0.9, " okay"), (20.0, 20.0, " lah")], [(0.0, 0.9, "yes okay lah")]),
+        # Unplaced word right before a later reply joins that reply instead.
+        (
+            [(0.0, 0.4, " yes"), (8.5, 8.5, " no"), (9.6, 10.0, " problem")],
+            [(0.0, 0.4, "yes"), (9.6, 10.0, "no problem")],
+        ),
+        # Unplaced word first: it joins the line after it.
+        ([(3.0, 3.0, " so"), (8.0, 8.4, " okay")], [(8.0, 8.4, "so okay")]),
+    ],
+)
+def test_a_word_with_no_length_never_becomes_its_own_line(words, expected):
+    model = FakeModel([[segment(0.0, 20.0, " text", words=words)]])
+    result = run(model, wav=MONO_WAV, line_gap_seconds=1.0)
+    assert [(s["start"], s["end"], s["text"]) for s in result["segments"]] == expected
+
+
+def test_a_line_whose_words_all_have_no_length_keeps_the_models_times():
+    model = FakeModel([[segment(4.0, 6.0, " hello there", words=[(5.0, 5.0, " hello"), (5.0, 5.0, " there")])]])
+    result = run(model, wav=MONO_WAV, line_gap_seconds=1.0)
+    assert [(s["start"], s["end"], s["text"]) for s in result["segments"]] == [(4.0, 6.0, "hello there")]
+
+
 def test_a_line_without_word_times_is_kept_whole():
     model = FakeModel([[segment(0.0, 5.0, " hello there")]])
     result = run(model, wav=MONO_WAV, line_gap_seconds=1.0)
